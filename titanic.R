@@ -3,11 +3,22 @@ library(ggplot2)
 library(caret)
 
 # load training and test sets
-train = read.csv("~/Downloads/all/train.csv")
-test = read.csv("~/Downloads/all/test.csv")
+train = read.csv("~/Desktop/projects/titanic2/train.csv")
+test = read.csv("~/Desktop/projects/titanic2/test.csv")
 
 # data summary
 survival_count = count(train, vars="Survived")
+survival_count
+
+# proportion of each gender that survived and died
+prop.table(table(train$Sex,train$Survived),1)
+
+### initial plots
+ggplot() + geom_bar(aes(x=Survived, fill=Sex), data=train) # by_sex 
+ggplot() + geom_bar(aes(x=Survived, fill=as.factor(train$Pclass)), data=train) # by_class 
+ggplot(data=train,aes(x=Age,fill=as.factor(Survived))) + geom_histogram(position="fill",binwidth =10) # by_age
+# the younger the passenger, the more likely they survived
+
 
 ## deal w/ missing values
 apply(train,2, function(x) mean(is.na(x)))
@@ -15,9 +26,16 @@ apply(train,2, function(x) mean(is.na(x)))
 median_age = median(train$Age[!is.na(train$Age)])
 train$Age[is.na(train$Age)] = median_age
 
-## summarize some existing features
-# proportion of each gender that survived and died
-prop.table(table(train$Sex,train$Survived),1)
+# age by bucket
+# train$Age[which(train$Age > 0 & train$Age < 12)] = "0-11"
+# train$Age[which(train$Age >= 12 & train$Age < 18)] = "12-17"
+# train$Age[which(train$Age >= 18 & train$Age < 25)] = "18-24"
+# train$Age[which(train$Age >= 25 & train$Age < 40)] = "25-39"
+# train$Age[which(train$Age >= 40 & train$Age < 65)] = "40-64"
+# train$Age[which(train$Age >= 65)] = "65+"
+# train$Age[which(is.na(train$Age))] = "25-39"
+# 
+# by_age = ggplot() + geom_bar(aes(x=Age, fill=Survived),data=train)
 
 ### create new features and test for correlation
 train['fam_size'] = train['SibSp'] + train['Parch']
@@ -37,7 +55,7 @@ train['prefix'] = regmatches(train[['Name']], regexpr("[[:alpha:]]+[.]", train[[
 unique(train$prefix)
 train$prefix[train$prefix == "Lady."] = "Miss."
 train$prefix[train$prefix == "Mlle."] = "Miss."
-train$prefix[train$prefix == "Countess."] = "Miss."
+train$prefix[train$prefix == "Countess."] = "Miss." #should be Mrs.
 train$prefix[train$prefix == "Ms."] = "Miss."
 train$prefix[train$prefix == "Mme."] = "Mrs."
 
@@ -53,14 +71,12 @@ train$prefix[train$prefix == "Major."] = "Mr."
 by_prefix = ggplot(data=train,aes(x=prefix,fill=as.factor(Survived))) + geom_bar(position="fill")
 # those with prefix Mr. are less likely to survive compared to those with prefixes Miss. or Mrs.
 
-by_age = ggplot(data=train,aes(x=Age,fill=as.factor(Survived))) + geom_histogram(position="fill",binwidth =10)
-# the younger the passenger, the more likely they survived
-
 # drop unnecessary columns
 to_drop = c("Ticket", "Cabin")
 train = train[,!(names(train) %in% to_drop)]
 test = test[,!(names(test) %in% to_drop)]
 
+# convert to factor
 train[,2] = sapply(train[,2], as.factor)
 test[,2] = sapply(test[,2], as.factor)
 
@@ -73,25 +89,6 @@ factor_test = match(c("Pclass","Sex","Embarked"),colnames(test))
 for (i in factor_test) {
   test[,i] = sapply(test[,i], as.factor)
 }
-
-# age by bucket
-# train$Age[which(train$Age > 0 & train$Age < 12)] = "0-11"
-# train$Age[which(train$Age >= 12 & train$Age < 18)] = "12-17"
-# train$Age[which(train$Age >= 18 & train$Age < 25)] = "18-24"
-# train$Age[which(train$Age >= 25 & train$Age < 40)] = "25-39"
-# train$Age[which(train$Age >= 40 & train$Age < 65)] = "40-64"
-# train$Age[which(train$Age >= 65)] = "65+"
-# train$Age[which(is.na(train$Age))] = "25-39"
-# 
-# by_age = ggplot() + geom_bar(aes(x=age, fill=survived),data=train)
-
-
-
-### initial plots
-by_sex = ggplot() + geom_bar(aes(x=Survived, fill=Sex), data=train)
-by_class = ggplot() + geom_bar(aes(x=Survived, fill=as.factor(train$Pclass)), data=train)
-by_title = ggplot() + geom_bar(aes(x=as.factor(prefix), fill=survived), data=train)
-
 
 ### fit and predict model
 to_test = c("Pclass","Sex","SibSp","Parch","Embarked","Age")
@@ -111,13 +108,15 @@ sample <- sample.int(n = nrow(train), size = floor(.80*nrow(train)), replace = F
 train_set <- new_train[sample,]
 val_set <- new_train[-sample,]
 
-# get accuracy on validation sett
+# get accuracy on validation set
+# gives .77990 kaggle score 
+# predict model on test set - gives .82123 score w/ age buckets
 predictions = predict(base_model, val_set)
 fitted.results <- ifelse(predictions > 0.5,1,0)
 misClasificError = mean(fitted.results != val_set$Survived)
 print(paste('Accuracy',1-misClasificError))
 
-# predict model on test set
+# run on test set 
 predictions = predict(base_model, test, na.action = na.pass)
 fitted.results <- ifelse(predictions > 0.5,1,0)
 
@@ -125,6 +124,7 @@ results = cbind(test[,1],fitted.results)
 
 colnames(results) = c("PassengerId","Survived")
 write.csv(results, "~/Desktop/titanic/predictions.csv", row.names=F)
+
 
 # glm model w/ 10-fold cv
 #### k-fold cross validation ####
@@ -150,8 +150,10 @@ acc
 # fit and predict model with cross-val (without Age variable)
 cv_model = train(Survived ~ ., family="binomial", method="glm",data = new_train, trControl=train_control, tuneLength=5)
 summary(cv_model)
-predictions = predict(cv_model, test)
-
+predictions = predict(cv_model, val_set)
+# predictions = predict(cv_model, test)
+misClasificError = mean(predictions != val_set$Survived)
+print(paste('Accuracy',1-misClasificError))
 results = data.frame(test[,1],predictions)
 
 # write results to a csv in the right format
