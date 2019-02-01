@@ -4,8 +4,6 @@ library(caret)
 library(mice)
 
 # load training and test sets
-# train = read.csv("~/Desktop/projects/titanic2/train.csv")
-# test = read.csv("~/Desktop/projects/titanic2/test.csv")
 train = read.csv("~/Desktop/titanic/train.csv")
 test = read.csv("~/Desktop/titanic/test.csv")
 
@@ -105,8 +103,6 @@ test = get_prefix(test)
 by_prefix = ggplot(data=train,aes(x=prefix,fill=as.factor(Survived))) + geom_bar(position="fill")
 # those with prefix Mr. are less likely to survive compared to those with prefixes Miss. or Mrs.
 
-
-
 impute_data <- function(data) {
   # make a copy before imputing 
   original_df = data
@@ -146,25 +142,9 @@ impute_data <- function(data) {
 train = impute_data(train)
 test = impute_data(test)
 
-# drop unnecessary columns
-# to_drop = c("Ticket", "Cabin")
-# train = train[,!(names(train) %in% to_drop)]
-# test = test[,!(names(test) %in% to_drop)]
-
 # convert to factor
 train$Pclass = as.factor(train$Pclass)
 test$Pclass = as.factor(test$Pclass)
-
-
-# # convert some columns to factor
-# factor_train = match(c("Pclass","Sex","Embarked"),colnames(train))
-# for (i in factor_train) {
-#   train[,i] = sapply(train[,i], as.factor)
-# }
-# factor_test = match(c("Pclass","Sex","Embarked"),colnames(test))
-# for (i in factor_test) {
-#   test[,i] = sapply(test[,i], as.factor)
-# }
 
 ### fit and predict model
 to_test = c("Pclass","Sex","SibSp","Parch","Embarked","Age","prefix")
