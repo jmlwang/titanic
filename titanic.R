@@ -26,31 +26,29 @@ levels(train$Ticket)[nchar(levels(train$Ticket))==0] = NA
 levels(train$Name)[nchar(levels(train$Name))==0] = NA
 levels(train$Sex)[nchar(levels(train$Sex))==0] = NA
 
+## deal w/ missing values
+apply(train,2, function(x) mean(is.na(x)))
+# drop cabin b/c 78% is missing 
+# view counts of values in Embarked
+count(train$Embarked)
+# replace missing values with most common value (S)
+train$Embarked[is.na(train$Embarked)] = "S"
+test$Embarked[is.na(test$Embarked)] = "S"
+
 ### initial plots
 ggplot() + geom_bar(aes(x=Survived, fill=Sex), data=train) # by_sex 
 ggplot() + geom_bar(aes(x=Survived, fill=as.factor(train$Pclass)), data=train) # by_class 
 ggplot(data=train,aes(x=Age,fill=as.factor(Survived))) + geom_histogram(position="fill",binwidth =10) # by_age
 # the younger the passenger, the more likely they survived
 
-
-## deal w/ missing values
-apply(train,2, function(x) mean(is.na(x)))
-# drop cabin b/c 78% is missing 
-
-# try imputing Age values using mice package
-md.pattern(train)
-
-# imputed_train = mice(train, m=5, method = 'pmm', seed = 500)
-# # using predictive mean matching
-# summary(imputed_train)
 # tried getting rid of rows without Age values. It increased the validation accuracy but it didn't increase the test accuracy.
 median_age <- function(data) {
   median_age = median(data$Age[!is.na(data$Age)])
   data$Age[is.na(data$Age)] = median_age
   return(data)
 }
-train = median_age(train)
-test = median_age(test)
+# train = median_age(train)
+# test = median_age(test)
 
 # age by bucket
 # bucket_ages <- function(data) {
@@ -76,7 +74,7 @@ by_fare_pp = ggplot(data = train,aes(x=Fare,fill=as.factor(Survived))) + geom_hi
 # the higher the fare, the more likely the passenger is to survive
 
 # which floor of the boat their cabin was on
-train['cabin'] = lapply(train['Cabin'],as.character)
+train['Cabin'] = lapply(train['Cabin'],as.character)
 train['deck'] = sapply(train[['Cabin']], substr, 1,1)
 
 # get name prefix
@@ -107,24 +105,66 @@ test = get_prefix(test)
 by_prefix = ggplot(data=train,aes(x=prefix,fill=as.factor(Survived))) + geom_bar(position="fill")
 # those with prefix Mr. are less likely to survive compared to those with prefixes Miss. or Mrs.
 
+
+
+impute_data <- function(data) {
+  # make a copy before imputing 
+  original_df = data
+  
+  # we want to remove categorical variables before we impute
+  # transform/one-hot some categorical variables
+  to_drop = c("PassengerId","Name","Cabin","deck","Ticket")
+  temp_dataset = data[,-which(names(data) %in% to_drop)]
+  
+  # convert to levels - 0=C, 1=Q, 2=S
+  temp_dataset$Embarked = as.factor(temp_dataset$Embarked)
+  levels(temp_dataset$Embarked) = c(0,1,2)
+  # convert to levels - 0=F, 1=M
+  temp_dataset$Sex = as.factor(temp_dataset$Sex)
+  levels(temp_dataset$Sex) = c(0,1)
+  # convert to levels - 0=Dr.,1=Miss,2=Mr.,3=Mrs.
+  temp_dataset$prefix = as.factor(temp_dataset$prefix)
+  levels(temp_dataset$prefix) = c(0,1,2,3)
+  
+  # try imputing Age values using mice package
+  # md.pattern(temp_dataset)
+  
+  imputed_train = mice(temp_dataset, m=5, method = 'pmm', seed = 500)
+  # # using predictive mean matching
+  # summary(imputed_train)
+  # check imputed data
+  # imputed_train$imp$Age
+  # replace missing values with imputed values
+  temp_dataset = complete(imputed_train,1)
+  
+  # add back some dropped columns
+  temp_dataset$PassengerId = original_df$PassengerId
+  temp_dataset$Name = original_df$Name
+  
+  return(temp_dataset)
+  }
+train = impute_data(train)
+test = impute_data(test)
+
 # drop unnecessary columns
-to_drop = c("Ticket", "Cabin")
-train = train[,!(names(train) %in% to_drop)]
-test = test[,!(names(test) %in% to_drop)]
+# to_drop = c("Ticket", "Cabin")
+# train = train[,!(names(train) %in% to_drop)]
+# test = test[,!(names(test) %in% to_drop)]
 
 # convert to factor
-train[,2] = sapply(train[,2], as.factor)
-test[,2] = sapply(test[,2], as.factor)
+train$Pclass = as.factor(train$Pclass)
+test$Pclass = as.factor(test$Pclass)
 
-# convert some columns to factor
-factor_train = match(c("Pclass","Sex","Embarked"),colnames(train))
-for (i in factor_train) {
-  train[,i] = sapply(train[,i], as.factor)
-}
-factor_test = match(c("Pclass","Sex","Embarked"),colnames(test))
-for (i in factor_test) {
-  test[,i] = sapply(test[,i], as.factor)
-}
+
+# # convert some columns to factor
+# factor_train = match(c("Pclass","Sex","Embarked"),colnames(train))
+# for (i in factor_train) {
+#   train[,i] = sapply(train[,i], as.factor)
+# }
+# factor_test = match(c("Pclass","Sex","Embarked"),colnames(test))
+# for (i in factor_test) {
+#   test[,i] = sapply(test[,i], as.factor)
+# }
 
 ### fit and predict model
 to_test = c("Pclass","Sex","SibSp","Parch","Embarked","Age","prefix")
@@ -155,43 +195,9 @@ print(paste('Accuracy',1-misClasificError))
 predictions = predict(base_model, test, na.action = na.pass)
 fitted.results <- ifelse(predictions > 0.5,1,0)
 
-results = cbind(test[,1],fitted.results)
+results = cbind(test$PassengerId,fitted.results)
 
 colnames(results) = c("PassengerId","Survived")
 write.csv(results, "~/Desktop/titanic/predictions.csv", row.names=F)
 
 
-# glm model w/ 10-fold cv
-#### k-fold cross validation ####
-train_control <- trainControl(method="cv", number=10, savePredictions = TRUE)
-
-folds  <- cut(seq(1,nrow(new_train)),breaks=10,labels=FALSE)
-result <- list()
-acc <- list()
-for(i in 1:10){
-  testIndexes <- which(folds==i,arr.ind=TRUE)
-  testData    <- new_train[testIndexes, ]
-  trainData   <- new_train[-testIndexes, ]
-  model       <- glm(Survived ~ .,family=binomial,data=trainData)
-  predictions = predict(model, val_set,type='response')
-  fitted.results <- ifelse(predictions > 0.5,1,0)
-  result[[i]] <- fitted.results
-  misClasificError = mean(predictions != testData$Survived)
-  acc[[i]] <- 1-misClasificError
-}
-result
-acc
-
-# fit and predict model with cross-val (without Age variable)
-cv_model = train(Survived ~ ., family="binomial", method="glm",data = new_train, trControl=train_control, tuneLength=5)
-summary(cv_model)
-predictions = predict(cv_model, val_set)
-# predictions = predict(cv_model, test)
-misClasificError = mean(predictions != val_set$Survived)
-print(paste('Accuracy',1-misClasificError))
-results = data.frame(test[,1],predictions)
-
-# write results to a csv in the right format
-colnames(results) = c("PassengerId","Survived")
-write.csv(results, "~/Desktop/titanic/predictions.csv", row.names=F)
-  
