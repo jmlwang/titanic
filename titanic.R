@@ -2,11 +2,13 @@ library(plyr)
 library(ggplot2)
 library(caret)
 library(mice)
+library(randomForest)
 
 # load training and test sets
 train = read.csv("~/Desktop/titanic/train.csv")
 test = read.csv("~/Desktop/titanic/test.csv")
 
+### EDA ###
 # data summary
 summary(train)
 lapply(train, class)
@@ -14,8 +16,12 @@ lapply(train, class)
 # how many survived
 survival_count = count(train, vars="Survived")
 survival_count
+
 # proportion of each gender that survived and died
 prop.table(table(train$Sex,train$Survived),1)
+
+## deal w/ missing values
+apply(train,2, function(x) mean(is.na(x)))
 
 # replace empty vals in factor columns with NA
 levels(train$Embarked)[nchar(levels(train$Embarked))==0] = NA
@@ -24,16 +30,13 @@ levels(train$Ticket)[nchar(levels(train$Ticket))==0] = NA
 levels(train$Name)[nchar(levels(train$Name))==0] = NA
 levels(train$Sex)[nchar(levels(train$Sex))==0] = NA
 
-## deal w/ missing values
-apply(train,2, function(x) mean(is.na(x)))
-# drop cabin b/c 78% is missing 
 # view counts of values in Embarked
 count(train$Embarked)
 # replace missing values with most common value (S)
 train$Embarked[is.na(train$Embarked)] = "S"
 test$Embarked[is.na(test$Embarked)] = "S"
 
-### initial plots
+### INITIAL PLOTS ###
 ggplot() + geom_bar(aes(x=Survived, fill=Sex), data=train) # by_sex 
 ggplot() + geom_bar(aes(x=Survived, fill=as.factor(train$Pclass)), data=train) # by_class 
 ggplot(data=train,aes(x=Age,fill=as.factor(Survived))) + geom_histogram(position="fill",binwidth =10) # by_age
@@ -63,19 +66,29 @@ median_age <- function(data) {
 # test = bucket_ages(test)
 # by_age = ggplot() + geom_bar(aes(x=Age, fill=Survived),data=train)
 
-### create new features and test for correlation
+### FEATURE  ###
+# create new features and test for correlation
 train['fam_size'] = train['SibSp'] + train['Parch']
-by_fam_size = ggplot() + geom_bar(aes(x=fam_size,fill=Survived), train, position="fill")
+by_fam_size = ggplot(train, aes(x=fam_size, fill=as.factor(Survived))) + geom_histogram(position="fill")
 
-train['fare_per_person'] = train['Fare'] / (train['fam_size'] + 1)
+# calculate fare per person - doing this lowers our accuracy
+get_fare_per_person <- function(data) {
+  # first calculate family size
+  data['fam_size'] = data['SibSp'] + data['Parch']
+  data['fare_per_person'] = data['Fare'] / (data['fam_size'] + 1)
+  return(data)
+}
+# train = get_fare_per_person(train)
+# test = get_fare_per_person(test)
+
 by_fare_pp = ggplot(data = train,aes(x=Fare,fill=as.factor(Survived))) + geom_histogram(binwidth=20,position="fill")
 # the higher the fare, the more likely the passenger is to survive
 
-# which floor of the boat their cabin was on
+# find which floor of the boat their cabin was on
 train['Cabin'] = lapply(train['Cabin'],as.character)
 train['deck'] = sapply(train[['Cabin']], substr, 1,1)
 
-# get name prefix
+# get name prefix and generalize
 get_prefix <- function(data) {
   data['Name'] = as.character(data[['Name']])
   data['prefix'] = regmatches(data[['Name']], regexpr("[[:alpha:]]+[.]", data[['Name']]))
@@ -103,6 +116,7 @@ test = get_prefix(test)
 by_prefix = ggplot(data=train,aes(x=prefix,fill=as.factor(Survived))) + geom_bar(position="fill")
 # those with prefix Mr. are less likely to survive compared to those with prefixes Miss. or Mrs.
 
+# impute age values
 impute_data <- function(data) {
   # make a copy before imputing 
   original_df = data
@@ -121,15 +135,16 @@ impute_data <- function(data) {
   # convert to levels - 0=Dr.,1=Miss,2=Mr.,3=Mrs.
   temp_dataset$prefix = as.factor(temp_dataset$prefix)
   levels(temp_dataset$prefix) = c(0,1,2,3)
-  
+
   # try imputing Age values using mice package
-  # md.pattern(temp_dataset)
-  
   imputed_train = mice(temp_dataset, m=5, method = 'pmm', seed = 500)
   # # using predictive mean matching
+  
   # summary(imputed_train)
+  
   # check imputed data
   # imputed_train$imp$Age
+  
   # replace missing values with imputed values
   temp_dataset = complete(imputed_train,1)
   
@@ -146,18 +161,23 @@ test = impute_data(test)
 train$Pclass = as.factor(train$Pclass)
 test$Pclass = as.factor(test$Pclass)
 
-### fit and predict model
+### FIT MODEL AND PREDICT ###
+# choose which values to use in model
 to_test = c("Pclass","Sex","SibSp","Parch","Embarked","Age","prefix")
+# adding Fare variable led to overfitting although it increased our validation acc
+
 new_train = train[,c("Survived",to_test)]
 
 # basic glm model
 base_model = glm(Survived ~ ., family = binomial(link="logit"), new_train)
 summary(base_model)
-
 # embarked, parch, sibsp are more statistically insignificant
-# age seems significant but should impute or figure out how to deal with missing values
-# for each additional male passenger, the log odds of that passenger surviving is -2.64
-# for each addiitonal passenger, being first-class changes the log odds of that passenger surviving by 2.49
+
+# calculate root-mean-squared error
+rss <- c(crossprod(base_model$residuals))
+mse <- rss / length(base_model$residuals)
+rmse <- sqrt(mse)
+rmse
 
 # split data into training and validation sets
 sample <- sample.int(n = nrow(train), size = floor(.80*nrow(train)), replace = F)
@@ -165,7 +185,7 @@ train_set <- new_train[sample,]
 val_set <- new_train[-sample,]
 
 # get accuracy on validation set
-# predict model on test set - gives .82123 score w/ age buckets
+# predict model on test set - gives .82123 validation acc w/ age buckets (but lowers public score)
 predictions = predict(base_model, val_set)
 fitted.results <- ifelse(predictions > 0.5,1,0)
 misClasificError = mean(fitted.results != val_set$Survived)
@@ -175,9 +195,55 @@ print(paste('Accuracy',1-misClasificError))
 predictions = predict(base_model, test, na.action = na.pass)
 fitted.results <- ifelse(predictions > 0.5,1,0)
 
+# format results for submission
 results = cbind(test$PassengerId,fitted.results)
-
 colnames(results) = c("PassengerId","Survived")
 write.csv(results, "~/Desktop/titanic/predictions.csv", row.names=F)
 
+# train_control <- trainControl(method="cv", number=10)
+# cv_model <- train(Survived~., data=new_train, trControl=train_control, method="glm", family=binomial)
+# cv_model <- train(Survived~., data=test, trControl=train_control, method="lm")
+# predictions = predict(cv_model,data=test)
+# fitted.results <- ifelse(predictions > 0.5,1,0)
+# # misClasificError = mean(fitted.results != val_set$Survived)
+# # print(paste('Accuracy',1-misClasificError))
+# results = cbind(test$PassengerId,fitted.results)
 
+### RANDOM FOREST ### 
+# gives lower val accuracy
+fit <- randomForest(as.factor(Survived) ~ .,
+                    data=train_set, 
+                    importance=TRUE, 
+                    ntree=2000,
+                    mtry=4)
+
+predictions <- predict(fit, val_set, OOB=TRUE, type = "response")
+# predictions <- predict(fit, test)
+misClasificError = mean(predictions != val_set$Survived)
+print(paste('Accuracy',1-misClasificError))
+
+# try another random forest package and tune parameters
+library(party)
+fit = cforest(as.factor(Survived) ~ .,
+        data = new_train, 
+        controls=cforest_unbiased(ntree=2000, mtry=4))
+# mtry=3 gave val acc of 84.9% but public score of 77.99%
+# mtry=4 gave val acc of 83.798% but public score of 78.47% 
+# mtry=5 gave val acc of 84.358% but public score of 77.03% 
+# changing ntree to 1000 lowered public score
+
+# fit model on val set
+predictions <- predict(fit, val_set, OOB=TRUE, type = "response")
+# calculate validation accuracy
+misClasificError = mean(predictions != val_set$Survived)
+print(paste('Accuracy',1-misClasificError))
+
+# fit model on test set
+predictions <- predict(fit, test, OOB=TRUE, type = "response")
+
+# format results for submission
+results = cbind(test$PassengerId,as.numeric(as.character(predictions)))
+colnames(results) = c("PassengerId","Survived")
+write.csv(results, "~/Desktop/titanic/rf_party_predictions.csv", row.names=F)
+
+# random forest continuously decreased public score - not as high as basic glm w/ imputed age values and prefix cleaning
